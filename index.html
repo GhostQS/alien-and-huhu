@@ -821,13 +821,18 @@ const HuHu = {
   headTilt: 0,
   wingPulse: 0, // extra wing flap on milestone
 
+  get hitbox() { return { x: this.x - 8, y: this.y - 28, w: 16, h: 36 }; },
+
   draw(animFrame, alienDead) {
-    const targetX = Alien.x - 34;
+    const targetX = Alien.x - 28;
     const targetY = alienDead
       ? Alien.y - 30
-      : Alien.y - 58 + Math.sin(animFrame * 0.06) * 7;
-    this.x += (targetX - this.x) * 0.12;
-    this.y += (targetY - this.y) * 0.12;
+      : Alien.ducking
+        ? Alien.y - 20                                   // crouch with alien
+        : Alien.y - 70 + Math.sin(animFrame * 0.06) * 6; // float (in low UFO/comet path)
+    const lf = Alien.ducking ? 0.22 : 0.12;
+    this.x += (targetX - this.x) * lf;
+    this.y += (targetY - this.y) * lf;
 
     // Curious head tilt when idle, droopy when dead
     const tiltTarget = alienDead
@@ -838,7 +843,9 @@ const HuHu = {
 
     const wA = alienDead
       ? 0.2
-      : Math.sin(animFrame * 0.15) * 0.65 + (this.wingPulse > 0 ? Math.sin(this.wingPulse * 0.6) * 0.4 : 0);
+      : Alien.ducking
+        ? 0.65  // wings folded tight when crouching
+        : Math.sin(animFrame * 0.15) * 0.65 + (this.wingPulse > 0 ? Math.sin(this.wingPulse * 0.6) * 0.4 : 0);
 
     ctx.save();
     ctx.translate(this.x, this.y);
@@ -1128,10 +1135,12 @@ const Spawner = {
   },
   draw(animFrame) { for (const o of this.obstacles) o.draw(animFrame); },
   checkCollision() {
-    const a = Alien.hitbox;
+    const a   = Alien.hitbox;
+    const hu  = HuHu.hitbox;
+    const hit = (b1, b2) => b1.x < b2.x+b2.w && b1.x+b1.w > b2.x && b1.y < b2.y+b2.h && b1.y+b1.h > b2.y;
     for (const o of this.obstacles) {
       const h = o.hitbox;
-      if (a.x < h.x+h.w && a.x+a.w > h.x && a.y < h.y+h.h && a.y+a.h > h.y) return true;
+      if (hit(a, h) || hit(hu, h)) return true;
     }
     return false;
   },
