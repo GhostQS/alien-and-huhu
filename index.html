@@ -819,36 +819,47 @@ const Alien = {
 const HuHu = {
   x: 72, y: 180,
   headTilt: 0,
-  wingPulse: 0, // extra wing flap on milestone
+  wingPulse: 0,
+  dead: false, deadTimer: 0, deadAngle: 0, vy: 0,
 
   get hitbox() { return { x: this.x - 8, y: this.y - 28, w: 16, h: 36 }; },
 
-  draw(animFrame, alienDead) {
-    const targetX = Alien.x - 28;
-    const targetY = alienDead
-      ? Alien.y - 30
-      : Alien.ducking
-        ? Alien.y - 20                                   // crouch with alien
-        : Alien.y - 70 + Math.sin(animFrame * 0.06) * 6; // float (in low UFO/comet path)
-    const lf = Alien.ducking ? 0.22 : 0.12;
-    this.x += (targetX - this.x) * lf;
-    this.y += (targetY - this.y) * lf;
+  die() { this.dead = true; this.deadTimer = 0; this.deadAngle = 0; this.vy = -4; },
 
-    // Curious head tilt when idle, droopy when dead
-    const tiltTarget = alienDead
-      ? 0.45
-      : Math.sin(animFrame * 0.019) * 0.25;
+  update(dt) {
+    if (!this.dead) return;
+    this.deadTimer += dt;
+    this.deadAngle  = -Math.min(this.deadTimer / 500, 1) * Math.PI / 2;
+    this.vy += CFG.GRAVITY * 0.55 * (dt / 16.67);
+    this.y  += this.vy * (dt / 16.67);
+    if (this.y >= CFG.GROUND_Y - 8) { this.y = CFG.GROUND_Y - 8; this.vy = 0; }
+  },
+
+  draw(animFrame) {
+    // Position: lerp toward alien when alive; physics handles it when dead
+    if (!this.dead) {
+      const targetX = Alien.x - 28;
+      const targetY = Alien.ducking
+        ? Alien.y - 20
+        : Alien.y - 70 + Math.sin(animFrame * 0.06) * 6;
+      const lf = Alien.ducking ? 0.22 : 0.12;
+      this.x += (targetX - this.x) * lf;
+      this.y += (targetY - this.y) * lf;
+    }
+
+    const tiltTarget = this.dead ? -0.7 : Math.sin(animFrame * 0.019) * 0.25;
     this.headTilt += (tiltTarget - this.headTilt) * 0.08;
     if (this.wingPulse > 0) this.wingPulse = Math.max(0, this.wingPulse - 1);
 
-    const wA = alienDead
-      ? 0.2
+    const wA = this.dead
+      ? 1.0   // wings flung wide
       : Alien.ducking
         ? 0.65  // wings folded tight when crouching
         : Math.sin(animFrame * 0.15) * 0.65 + (this.wingPulse > 0 ? Math.sin(this.wingPulse * 0.6) * 0.4 : 0);
 
     ctx.save();
     ctx.translate(this.x, this.y);
+    if (this.dead) ctx.rotate(this.deadAngle); // tumble counterclockwise
 
     // Body
     ctx.fillStyle = CFG.C.HUHU_BODY;
@@ -861,7 +872,7 @@ const HuHu = {
     // Heart on tummy
     ctx.fillStyle = CFG.C.HUHU_HEART;
     ctx.save();
-    ctx.globalAlpha = alienDead ? 0.4 : 0.75;
+    ctx.globalAlpha = this.dead ? 0.3 : 0.75;
     drawHeart(ctx, 0, 1, 3.8);
     ctx.fill();
     ctx.restore();
@@ -888,22 +899,28 @@ const HuHu = {
     ctx.beginPath(); ctx.moveTo(-5,-9); ctx.lineTo(-9,-17); ctx.lineTo(-2,-9); ctx.fill();
     ctx.beginPath(); ctx.moveTo( 5,-9); ctx.lineTo( 9,-17); ctx.lineTo( 2,-9); ctx.fill();
 
-    // Eyes
+    // Eyes — normal pupils or ✕ when dead
     ctx.fillStyle = CFG.C.HUHU_EYE;
     ctx.beginPath(); ctx.arc(-4.5, -1, 5.5, 0, Math.PI * 2); ctx.fill();
     ctx.beginPath(); ctx.arc( 4.5, -1, 5.5, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = CFG.C.HUHU_PUPIL;
-    ctx.beginPath(); ctx.arc(-4.5, -1, 2.8, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.arc( 4.5, -1, 2.8, 0, Math.PI * 2); ctx.fill();
-    // Eye sparkles
-    ctx.fillStyle = '#fff';
-    ctx.beginPath(); ctx.arc(-3.2, -2.5, 1.1, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.arc( 5.8, -2.5, 1.1, 0, Math.PI * 2); ctx.fill();
+    if (this.dead) {
+      ctx.strokeStyle = CFG.C.HUHU_PUPIL; ctx.lineWidth = 2.2;
+      [-4.5, 4.5].forEach(ex => {
+        ctx.beginPath(); ctx.moveTo(ex - 2.5, -3.5); ctx.lineTo(ex + 2.5,  1.5); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(ex + 2.5, -3.5); ctx.lineTo(ex - 2.5,  1.5); ctx.stroke();
+      });
+    } else {
+      ctx.fillStyle = CFG.C.HUHU_PUPIL;
+      ctx.beginPath(); ctx.arc(-4.5, -1, 2.8, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc( 4.5, -1, 2.8, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(-3.2, -2.5, 1.1, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc( 5.8, -2.5, 1.1, 0, Math.PI * 2); ctx.fill();
+    }
 
     // Eyebrows — happy arch or sad droop
-    ctx.strokeStyle = CFG.C.HUHU_WING;
-    ctx.lineWidth = 1.8;
-    if (alienDead) {
+    ctx.strokeStyle = CFG.C.HUHU_WING; ctx.lineWidth = 1.8;
+    if (this.dead) {
       ctx.beginPath(); ctx.arc(-4.5, -7.5, 3.5, Math.PI * 0.85, Math.PI * 1.65); ctx.stroke();
       ctx.beginPath(); ctx.arc( 4.5, -7.5, 3.5, Math.PI * 1.35, Math.PI * 2.15); ctx.stroke();
     } else {
@@ -920,7 +937,10 @@ const HuHu = {
   },
 
   celebrate() { this.wingPulse = 30; },
-  reset()     { this.x = 72; this.y = 180; this.headTilt = 0; this.wingPulse = 0; }
+  reset() {
+    this.x = 72; this.y = 180; this.headTilt = 0; this.wingPulse = 0;
+    this.dead = false; this.deadTimer = 0; this.deadAngle = 0; this.vy = 0;
+  }
 };
 
 // ─── OBSTACLES ───────────────────────────────────────────────────────────────
@@ -1258,7 +1278,9 @@ const Game = {
     }
     if (s === 'GAMEOVER') {
       Alien.die();
+      HuHu.die();
       Particles.burst('death', Alien.x, Alien.y - 20);
+      Particles.burst('death', HuHu.x,  HuHu.y);
       Audio.play('die');
       Score.saveHigh();
       this.gameOverTimer = 2000;
@@ -1283,6 +1305,7 @@ const Game = {
     } else if (this.state === 'GAMEOVER') {
       this.gameOverTimer -= dt;
       Alien.update(dt);
+      HuHu.update(dt);
       Particles.update(dt);
     } else {
       BG.update(dt, 2);
@@ -1319,7 +1342,7 @@ const Game = {
     const panelX  = CFG.W / 2 - panelW / 2;
 
     // HuHu floats freely to the left of the panel
-    HuHu.draw(af, false);
+    HuHu.draw(af);
 
     // Panel
     ctx.save();
@@ -1375,7 +1398,7 @@ const Game = {
     BG.draw(this.frame);
     const af = this.frame / 16.67;
     Spawner.draw(af);
-    HuHu.draw(af, false);
+    HuHu.draw(af);
     Alien.draw(af);
     Particles.draw();
     Score.draw();
@@ -1387,7 +1410,7 @@ const Game = {
     BG.draw(this.frame);
     const af = this.frame / 16.67;
     Spawner.draw(af);
-    HuHu.draw(af, true);
+    HuHu.draw(af);
     Alien.draw(af);
     Particles.draw();
 
