@@ -2,24 +2,23 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>Alien &amp; HuHu</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    background: #0d0820;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 100vh;
+  html, body {
+    width: 100%; height: 100%;
     overflow: hidden;
-    font-family: monospace;
+    background: #0d0820;
   }
   canvas {
     image-rendering: pixelated;
     image-rendering: crisp-edges;
     display: block;
+    touch-action: none;
     cursor: none;
+    position: fixed;
+    top: 0; left: 0;
   }
 </style>
 </head>
@@ -131,12 +130,43 @@ canvas.width  = CFG.W;
 canvas.height = CFG.H;
 
 function handleResize() {
-  const scale = Math.min(window.innerWidth / CFG.W, window.innerHeight / CFG.H);
-  canvas.style.width  = CFG.W * scale + 'px';
-  canvas.style.height = CFG.H * scale + 'px';
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const portrait = vh > vw * 1.2;
+
+  if (portrait) {
+    const logW = 350;
+    const logH = Math.round(logW * vh / vw);
+    CFG.W = logW; CFG.H = logH;
+    CFG.GROUND_Y = logH - 52;
+    const s = logW / 800;
+    CFG.INIT_SPEED = 5 * s; CFG.MAX_SPEED = 18 * s; CFG.SPEED_INC = 0.0008 * s;
+    canvas.width  = logW;
+    canvas.height = logH;
+    canvas.style.width  = vw + 'px';
+    canvas.style.height = vh + 'px';
+    canvas.style.left = '0px'; canvas.style.top = '0px';
+  } else {
+    CFG.W = 800; CFG.H = 300; CFG.GROUND_Y = 248;
+    CFG.INIT_SPEED = 5; CFG.MAX_SPEED = 18; CFG.SPEED_INC = 0.0008;
+    canvas.width  = 800; canvas.height = 300;
+    const scale = Math.min(vw / 800, vh / 300);
+    const cw = Math.round(800 * scale);
+    const ch = Math.round(300 * scale);
+    canvas.style.width  = cw + 'px'; canvas.style.height = ch + 'px';
+    canvas.style.left   = Math.round((vw - cw) / 2) + 'px';
+    canvas.style.top    = Math.round((vh - ch) / 2) + 'px';
+  }
 }
 handleResize();
-window.addEventListener('resize', handleResize);
+window.addEventListener('resize', () => {
+  handleResize();
+  if (typeof BG !== 'undefined') {
+    BG.init();
+    if (typeof Alien !== 'undefined') Alien.y = CFG.GROUND_Y;
+    if (typeof Game !== 'undefined' && Game.state === 'PLAYING') Game.transitionTo('TITLE');
+  }
+});
 
 // ─── AUDIO ───────────────────────────────────────────────────────────────────
 const Audio = {
@@ -1275,7 +1305,9 @@ const Game = {
     BG.draw(this.frame);
     const af      = this.frame / 16.67;
     const bob     = Math.sin(af * 0.05) * 3;
-    const PANEL_B = 246; // panel bottom y
+    const PANEL_B = 246; // panel bottom y (fixed — panel always near top)
+    const panelW  = Math.min(410, CFG.W - 16);
+    const panelX  = CFG.W / 2 - panelW / 2;
 
     // HuHu floats freely to the left of the panel
     HuHu.draw(af, false);
@@ -1284,7 +1316,7 @@ const Game = {
     ctx.save();
     ctx.globalAlpha = 0.91;
     ctx.fillStyle   = '#0d0820';
-    roundRect(ctx, CFG.W/2 - 205, 50, 410, 196, 14);
+    roundRect(ctx, panelX, 50, panelW, 196, 14);
     ctx.fill();
     ctx.restore();
 
@@ -1309,7 +1341,10 @@ const Game = {
     }
     ctx.font      = '11px monospace';
     ctx.fillStyle = '#6b7280';
-    ctx.fillText('SPACE / ↑  JUMP     ↓  DUCK     M  MUTE', CFG.W/2, 232);
+    const ctrlHint = CFG.H > CFG.W
+      ? 'TAP JUMP    SLIDE↓ DUCK    M MUTE'
+      : 'SPACE / ↑  JUMP     ↓  DUCK     M  MUTE';
+    ctx.fillText(ctrlHint, CFG.W/2, 232);
 
     // Alien peeking out below the panel (clipped to below panel bottom)
     ctx.save();
@@ -1347,10 +1382,12 @@ const Game = {
     Alien.draw(af);
     Particles.draw();
 
+    const goW = Math.min(360, CFG.W - 20);
+    const goX = CFG.W / 2 - goW / 2;
     ctx.save();
     ctx.globalAlpha = 0.82;
     ctx.fillStyle   = '#0d0820';
-    roundRect(ctx, CFG.W/2 - 180, CFG.H/2 - 72, 360, 162, 14);
+    roundRect(ctx, goX, CFG.H/2 - 72, goW, 162, 14);
     ctx.fill();
     ctx.restore();
 
@@ -1395,15 +1432,31 @@ window.addEventListener('keyup', e => {
   if (['ArrowDown','KeyS'].includes(e.code)) Alien.ducking = false;
 });
 
-let touchStartY = 0;
-canvas.addEventListener('touchstart', e => { e.preventDefault(); touchStartY = e.touches[0].clientY; handleJump(); }, {passive:false});
-canvas.addEventListener('touchmove',  e => {
+let touchStartY = 0, touchMoved = false;
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  Audio.init(); Music.start();
+  touchStartY = e.touches[0].clientY;
+  touchMoved  = false;
+}, {passive:false});
+canvas.addEventListener('touchmove', e => {
   e.preventDefault();
   if (Game.state !== 'PLAYING') return;
-  if (e.touches[0].clientY - touchStartY > 20) Alien.ducking = true;
+  if (e.touches[0].clientY - touchStartY > 30) {
+    touchMoved = true;
+    Alien.ducking = true;
+  }
 }, {passive:false});
-canvas.addEventListener('touchend',   e => { e.preventDefault(); Alien.ducking = false; }, {passive:false});
-canvas.addEventListener('pointerdown',e => { if (e.pointerType !== 'touch') handleJump(); });
+canvas.addEventListener('touchend', e => {
+  e.preventDefault();
+  Alien.ducking = false;
+  if (!touchMoved) {
+    if (Game.state === 'TITLE')                               { Game.transitionTo('PLAYING'); return; }
+    if (Game.state === 'PLAYING')                             { Alien.jump(); return; }
+    if (Game.state === 'GAMEOVER' && Game.gameOverTimer <= 0) { Game.transitionTo('TITLE'); }
+  }
+}, {passive:false});
+canvas.addEventListener('pointerdown', e => { if (e.pointerType !== 'touch') handleJump(); });
 
 // ─── GAME LOOP ────────────────────────────────────────────────────────────────
 let lastTime = 0;
