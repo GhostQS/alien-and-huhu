@@ -1,0 +1,619 @@
+/* ─── ALIEN & HUHU: NEON RUN — interface layer ──────────────────────────────
+   All menus and HUD are DOM, layered over the WebGL canvas. Text stays crisp at
+   any resolution, and the whole thing reflows for portrait phones for free.
+
+   No web fonts: the display face is a heavy, wide, letter-spaced system sans;
+   numerics use the system monospace so digits don't jitter as they count up. */
+
+:root {
+  /* Neon palette — biome code overwrites --acc / --acc2 at runtime. */
+  --acc:      #16f2ff;   /* primary neon (cyan) */
+  --acc2:     #ff2ea6;   /* secondary neon (magenta) */
+  --acc3:     #b57bff;   /* tertiary (violet) */
+  --warn:     #ffcc33;
+  --danger:   #ff3b5c;
+  --good:     #3dffab;
+
+  --ink:      #eaf6ff;
+  --ink-dim:  #8fa8c4;
+  --ink-faint:#4d6382;
+
+  --bg:       #04030c;
+  --panel:    rgba(8, 12, 28, 0.82);
+  --panel-hi: rgba(18, 26, 52, 0.9);
+  --line:     rgba(22, 242, 255, 0.28);
+
+  --glow:     0 0 12px var(--acc), 0 0 34px rgba(22, 242, 255, 0.35);
+  --glow2:    0 0 12px var(--acc2), 0 0 34px rgba(255, 46, 166, 0.32);
+
+  --display: system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--display);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+  touch-action: none;
+}
+
+#gl {
+  display: block;
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+/* ─── overlay scaffolding ───────────────────────────────────────────────── */
+#ui {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;      /* screens re-enable it individually */
+  z-index: 10;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.screen {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(10px, 2.2vh, 26px);
+  padding: calc(20px + var(--safe-t)) calc(20px + var(--safe-r)) calc(20px + var(--safe-b)) calc(20px + var(--safe-l));
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity .28s ease, visibility .28s;
+  /* Short viewports (landscape phones, small windows) must not clip a menu.
+     Centred until it overflows, then scrollable — `safe` stops flexbox from
+     pushing the first item off the top edge. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  justify-content: safe center;
+  -webkit-overflow-scrolling: touch;
+}
+.screen > * { flex-shrink: 0; }
+.screen.on {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+/* The title screen has no scrim — the city IS the art — so the text block gets
+   its own soft shadow behind it, otherwise the prompt vanishes into the skyline. */
+#scrTitle::before {
+  content: '';
+  position: absolute;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(1000px, 96vw);
+  height: min(560px, 78vh);
+  background: radial-gradient(ellipse at center, rgba(4, 3, 12, .88) 0%, rgba(4, 3, 12, .55) 45%, transparent 72%);
+  pointer-events: none;
+}
+#scrTitle > * { position: relative; }
+#titlePrompt, #titleBest { text-shadow: 0 2px 14px rgba(0, 0, 0, .95); }
+#titlePrompt { color: var(--ink); font-weight: 600; }
+#titlePrompt b { color: var(--acc); }
+
+/* Screens that sit over live gameplay get a readable scrim. */
+.screen.scrim {
+  background:
+    radial-gradient(ellipse at 50% 45%, rgba(4, 3, 12, 0.55) 0%, rgba(4, 3, 12, 0.92) 72%),
+    linear-gradient(180deg, rgba(4, 3, 12, 0.6), rgba(4, 3, 12, 0.85));
+  backdrop-filter: blur(7px) saturate(0.85);
+  -webkit-backdrop-filter: blur(7px) saturate(0.85);
+}
+
+/* ─── type ──────────────────────────────────────────────────────────────── */
+.kicker {
+  font: 600 clamp(10px, 1.5vw, 13px)/1 var(--mono);
+  letter-spacing: .42em;
+  text-transform: uppercase;
+  color: var(--acc);
+  text-shadow: 0 0 14px rgba(22, 242, 255, .55);
+  padding-left: .42em;        /* balance the trailing letter-space */
+}
+
+.title {
+  font: 900 clamp(38px, 9.5vw, 104px)/0.92 var(--display);
+  letter-spacing: -0.02em;
+  text-transform: uppercase;
+  text-align: center;
+  background: linear-gradient(178deg, #ffffff 4%, var(--acc) 42%, var(--acc3) 68%, var(--acc2) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 0 18px rgba(22, 242, 255, .45)) drop-shadow(0 4px 24px rgba(255, 46, 166, .28));
+  position: relative;
+}
+.title .sub {
+  display: block;
+  font-size: .16em;               /* a subtitle, not a second title */
+  font-weight: 600;
+  letter-spacing: .46em;
+  margin-top: 1.1em;
+  background: none;
+  -webkit-text-fill-color: var(--ink-dim);
+  color: var(--ink-dim);
+  filter: none;
+  padding-left: .46em;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, .9);
+}
+
+.h2 {
+  font: 800 clamp(20px, 3.4vw, 34px)/1.1 var(--display);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--ink);
+  text-shadow: 0 0 18px rgba(22, 242, 255, .35);
+}
+
+.muted { color: var(--ink-dim); font: 500 clamp(12px, 1.7vw, 15px)/1.5 var(--display); }
+.tiny  { color: var(--ink-faint); font: 500 clamp(10px, 1.3vw, 12px)/1.5 var(--mono); letter-spacing: .12em; }
+
+/* ─── glitch title effect ───────────────────────────────────────────────── */
+/* Two clipped copies offset in opposite directions on the accent colours.
+   Runs only in short bursts so it never becomes visual noise. */
+.glitch { position: relative; }
+.glitch::before, .glitch::after {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  background: none;
+  -webkit-background-clip: initial;
+  background-clip: initial;
+  opacity: 0;
+  pointer-events: none;
+}
+.glitch::before { -webkit-text-fill-color: var(--acc2); color: var(--acc2); }
+.glitch::after  { -webkit-text-fill-color: var(--acc);  color: var(--acc); }
+.glitch.fire::before { animation: gl-a .34s steps(2, end) 1; }
+.glitch.fire::after  { animation: gl-b .34s steps(2, end) 1; }
+@keyframes gl-a {
+  0%   { opacity: .9; transform: translate(-4px, 2px); clip-path: inset(12% 0 62% 0); }
+  40%  { opacity: .7; transform: translate(5px, -3px); clip-path: inset(58% 0 18% 0); }
+  100% { opacity: 0;  transform: none; }
+}
+@keyframes gl-b {
+  0%   { opacity: .9; transform: translate(4px, -2px); clip-path: inset(48% 0 24% 0); }
+  40%  { opacity: .7; transform: translate(-5px, 3px); clip-path: inset(8% 0 74% 0); }
+  100% { opacity: 0;  transform: none; }
+}
+
+/* ─── panels ────────────────────────────────────────────────────────────── */
+.panel {
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: clamp(18px, 3vw, 30px) clamp(20px, 3.4vw, 38px);
+  /* Clipped corners read as "hardware UI" far more than a border-radius does. */
+  clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .6), 0 18px 60px rgba(0, 0, 0, .55), inset 0 0 60px rgba(22, 242, 255, .05);
+  max-width: min(560px, 92vw);
+  width: 100%;
+}
+.panel::before {
+  /* Corner tick, top-left. */
+  content: '';
+  position: absolute;
+  top: 8px; left: 8px;
+  width: 26px; height: 26px;
+  border-top: 2px solid var(--acc);
+  border-left: 2px solid var(--acc);
+  opacity: .55;
+}
+.panel::after {
+  content: '';
+  position: absolute;
+  bottom: 8px; right: 8px;
+  width: 26px; height: 26px;
+  border-bottom: 2px solid var(--acc2);
+  border-right: 2px solid var(--acc2);
+  opacity: .55;
+}
+
+/* ─── menu buttons ──────────────────────────────────────────────────────── */
+.menu { display: flex; flex-direction: column; gap: 10px; width: min(420px, 88vw); }
+
+.btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: clamp(12px, 1.9vh, 17px) 22px;
+  background: linear-gradient(100deg, rgba(22, 242, 255, .07), rgba(22, 242, 255, .02) 55%, transparent);
+  border: 1px solid rgba(143, 168, 196, .22);
+  border-left: 3px solid var(--ink-faint);
+  color: var(--ink);
+  font: 700 clamp(13px, 2vw, 16px)/1 var(--display);
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: border-color .16s, background .16s, transform .12s, color .16s, box-shadow .16s;
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%);
+  text-align: left;
+}
+.btn .key {
+  margin-left: auto;
+  font: 600 11px/1 var(--mono);
+  letter-spacing: .1em;
+  color: var(--ink-faint);
+  border: 1px solid rgba(143, 168, 196, .25);
+  padding: 4px 7px;
+}
+.btn:hover, .btn:focus-visible, .btn.sel {
+  border-color: var(--acc);
+  border-left-color: var(--acc);
+  background: linear-gradient(100deg, rgba(22, 242, 255, .2), rgba(22, 242, 255, .05) 60%, transparent);
+  color: #fff;
+  outline: none;
+  transform: translateX(4px);
+  box-shadow: -3px 0 18px rgba(22, 242, 255, .35), inset 0 0 22px rgba(22, 242, 255, .08);
+}
+.btn:active { transform: translateX(4px) scale(.985); }
+.btn.primary {
+  border-left-color: var(--acc);
+  background: linear-gradient(100deg, rgba(22, 242, 255, .18), rgba(255, 46, 166, .08) 70%, transparent);
+  font-size: clamp(15px, 2.4vw, 19px);
+  padding-block: clamp(15px, 2.4vh, 21px);
+}
+.btn.primary:hover, .btn.primary.sel {
+  background: linear-gradient(100deg, rgba(22, 242, 255, .34), rgba(255, 46, 166, .16) 70%, transparent);
+}
+.btn[disabled] { opacity: .35; pointer-events: none; }
+
+/* ─── settings rows ─────────────────────────────────────────────────────── */
+.rows { display: flex; flex-direction: column; gap: 3px; width: 100%; }
+.row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 14px;
+  border-left: 2px solid transparent;
+  transition: background .14s, border-color .14s;
+}
+.row:hover, .row.sel { background: rgba(22, 242, 255, .07); border-left-color: var(--acc); }
+.row .label {
+  flex: 0 0 auto;
+  min-width: 9.5em;
+  font: 600 clamp(11px, 1.6vw, 13px)/1.2 var(--display);
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.row .ctl { flex: 1 1 auto; display: flex; align-items: center; gap: 10px; justify-content: flex-end; }
+.row .val { font: 600 12px/1 var(--mono); color: var(--acc); min-width: 4.2em; text-align: right; letter-spacing: .06em; }
+
+input[type=range] {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1 1 auto;
+  max-width: 210px;
+  height: 3px;
+  background: linear-gradient(90deg, var(--acc) var(--pct, 50%), rgba(143, 168, 196, .22) var(--pct, 50%));
+  cursor: pointer;
+  outline: none;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 13px; height: 15px;
+  background: var(--acc);
+  box-shadow: 0 0 10px var(--acc);
+  cursor: pointer;
+  clip-path: polygon(50% 0, 100% 28%, 100% 100%, 0 100%, 0 28%);
+}
+input[type=range]::-moz-range-thumb {
+  width: 13px; height: 15px; border: none;
+  background: var(--acc); box-shadow: 0 0 10px var(--acc); cursor: pointer;
+}
+
+.seg { display: flex; gap: 0; border: 1px solid rgba(143, 168, 196, .22); }
+.seg button {
+  background: transparent;
+  border: none;
+  color: var(--ink-dim);
+  font: 600 11px/1 var(--mono);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  padding: 8px 13px;
+  cursor: pointer;
+  transition: background .14s, color .14s;
+}
+.seg button + button { border-left: 1px solid rgba(143, 168, 196, .18); }
+.seg button.on { background: var(--acc); color: #04030c; text-shadow: none; }
+.seg button:hover:not(.on) { background: rgba(22, 242, 255, .12); color: var(--ink); }
+
+/* ─── HUD ───────────────────────────────────────────────────────────────── */
+#hud {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity .3s;
+  padding: calc(16px + var(--safe-t)) calc(18px + var(--safe-r)) calc(16px + var(--safe-b)) calc(18px + var(--safe-l));
+}
+#hud.on { opacity: 1; }
+
+.hud-tl { position: absolute; top: calc(16px + var(--safe-t)); left: calc(18px + var(--safe-l)); }
+.hud-tr { position: absolute; top: calc(16px + var(--safe-t)); right: calc(18px + var(--safe-r)); text-align: right; }
+.hud-bl { position: absolute; bottom: calc(16px + var(--safe-b)); left: calc(18px + var(--safe-l)); }
+.hud-bc { position: absolute; bottom: calc(18px + var(--safe-b)); left: 50%; transform: translateX(-50%); }
+/* On a phone the pause button lives in the bottom-right corner, so the meter
+   lifts clear of it rather than sliding underneath. */
+@media (orientation: portrait) and (max-width: 560px) {
+  .hud-bc { bottom: calc(76px + var(--safe-b)); }
+  #huhuDown { top: calc(96px + var(--safe-t)); }
+  #odBar { width: min(62vw, 260px); }
+}
+
+.stat-label {
+  font: 600 clamp(8px, 1.1vw, 10px)/1 var(--mono);
+  letter-spacing: .34em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-bottom: 5px;
+  padding-left: .34em;
+}
+.stat-value {
+  font: 700 clamp(24px, 4.4vw, 44px)/0.9 var(--mono);
+  letter-spacing: -0.01em;
+  color: #fff;
+  text-shadow: 0 0 18px rgba(22, 242, 255, .5);
+  font-variant-numeric: tabular-nums;
+}
+.stat-value.sm { font-size: clamp(15px, 2.3vw, 22px); }
+.stat-value.hi { color: var(--acc); }
+
+/* Score pops on milestone. */
+@keyframes pop { 0% { transform: scale(1); } 35% { transform: scale(1.22); } 100% { transform: scale(1); } }
+.pop { animation: pop .34s cubic-bezier(.2, 1.4, .4, 1); }
+
+/* Combo meter */
+#combo { position: absolute; top: 50%; left: calc(30px + var(--safe-l)); transform: translateY(-50%); opacity: 0; transition: opacity .2s; }
+#combo.on { opacity: 1; }
+#combo .mult {
+  font: 900 clamp(26px, 5vw, 46px)/1 var(--display);
+  letter-spacing: -.02em;
+  color: var(--warn);
+  text-shadow: 0 0 22px rgba(255, 204, 51, .6);
+}
+#comboBar { width: 5px; height: clamp(70px, 14vh, 130px); background: rgba(143, 168, 196, .18); margin-top: 8px; position: relative; }
+#comboFill { position: absolute; bottom: 0; left: 0; width: 100%; background: linear-gradient(180deg, var(--acc2), var(--warn)); box-shadow: 0 0 12px var(--warn); transition: height .1s linear; }
+
+/* Shield pips */
+#shields { display: flex; gap: 6px; margin-top: 8px; }
+.pip {
+  width: 15px; height: 15px;
+  border: 2px solid var(--acc);
+  background: rgba(22, 242, 255, .18);
+  box-shadow: 0 0 10px rgba(22, 242, 255, .5);
+  clip-path: polygon(50% 0, 100% 30%, 100% 72%, 50% 100%, 0 72%, 0 30%);
+  transition: opacity .18s, transform .18s, background .18s;
+}
+.pip.spent { opacity: .18; background: transparent; box-shadow: none; transform: scale(.82); }
+
+/* Power-up timers */
+#powers { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; margin-top: 10px; }
+.power {
+  display: flex; align-items: center; gap: 8px;
+  font: 700 10px/1 var(--mono); letter-spacing: .2em; text-transform: uppercase;
+  color: var(--ink);
+  padding: 5px 9px;
+  border: 1px solid currentColor;
+  background: rgba(4, 3, 12, .55);
+}
+.power .bar { width: 42px; height: 3px; background: rgba(255, 255, 255, .2); position: relative; }
+.power .bar i { position: absolute; inset: 0 auto 0 0; background: currentColor; box-shadow: 0 0 8px currentColor; }
+
+/* Overdrive meter — the one HUD element the player watches while running, so it
+   sits centre-bottom, directly under the road rather than off in a corner. */
+#odBar {
+  position: relative;
+  width: clamp(150px, 26vw, 260px);
+  height: 8px;
+  background: rgba(143, 168, 196, .16);
+  border: 1px solid rgba(143, 168, 196, .22);
+  overflow: visible;
+}
+#odFill {
+  position: absolute; inset: 0 auto 0 0; width: 0%;
+  background: linear-gradient(90deg, var(--acc), var(--warn));
+  box-shadow: 0 0 12px var(--acc);
+  transition: width .12s linear;
+}
+#odReady {
+  position: absolute; left: 50%; top: -21px; transform: translateX(-50%);
+  font: 800 10px/1 var(--mono); letter-spacing: .28em; color: #04030c;
+  background: var(--warn); padding: 4px 9px; white-space: nowrap;
+  box-shadow: 0 0 20px rgba(255, 204, 51, .7);
+  opacity: 0; transition: opacity .2s;
+}
+#odBar.ready #odReady { opacity: 1; animation: pop .6s ease-in-out infinite alternate; }
+#odWrap.ready > .stat-label { opacity: 0; }
+#odWrap > .stat-label { transition: opacity .2s; }
+#odBar.ready #odFill { background: var(--warn); box-shadow: 0 0 20px var(--warn); }
+#odBar.active { border-color: var(--warn); }
+#odBar.active #odFill { background: repeating-linear-gradient(90deg, var(--warn) 0 8px, #fff 8px 16px); }
+
+/* Pulse charges — HuHu's own economy, shown as chevrons under the shield pips */
+#pulses { display: flex; gap: 5px; margin-top: 6px; }
+.pulse-dot {
+  width: 13px; height: 13px;
+  border: 2px solid var(--acc2);
+  background: rgba(255, 46, 166, .22);
+  box-shadow: 0 0 9px rgba(255, 46, 166, .5);
+  border-radius: 50%;
+  transition: opacity .18s, transform .18s, background .18s;
+}
+.pulse-dot.spent { opacity: .16; background: transparent; box-shadow: none; transform: scale(.8); }
+
+/* HuHu-down warning: the double jump is gone and the player must feel it */
+#huhuDown {
+  /* Never centred: this sits on screen for 12 seconds, and the middle of the
+     frame is where the track has to be read. */
+  position: absolute; top: calc(16px + var(--safe-t)); left: 50%; transform: translateX(-50%);
+  display: none; align-items: center; gap: 10px;
+  font: 800 clamp(11px, 1.6vw, 14px)/1 var(--mono); letter-spacing: .26em;
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  background: rgba(20, 2, 8, .72);
+  padding: 9px 15px;
+}
+#huhuDown.on { display: flex; }
+#huhuDown .dot { width: 8px; height: 8px; background: var(--danger); border-radius: 50%; animation: pop .8s infinite alternate; }
+#huhuDown i { font-style: normal; color: var(--ink); min-width: 3em; text-align: right; }
+
+/* Centre banners — biome change, speed up, near miss */
+#banner {
+  position: absolute;
+  top: 26%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  pointer-events: none;
+  opacity: 0;
+}
+#banner .big {
+  font: 900 clamp(24px, 5.5vw, 56px)/1 var(--display);
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: #fff;
+  text-shadow: 0 0 26px var(--acc), 0 0 60px var(--acc2);
+}
+#banner .small { font: 600 clamp(10px, 1.6vw, 13px)/1 var(--mono); letter-spacing: .4em; color: var(--acc); margin-top: 10px; padding-left: .4em; }
+@keyframes bannerIn {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(.86); filter: blur(8px); }
+  18%  { opacity: 1; transform: translate(-50%, -50%) scale(1.04); filter: blur(0); }
+  76%  { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.06); filter: blur(4px); }
+}
+#banner.show { animation: bannerIn 2.1s cubic-bezier(.2, .9, .3, 1) 1 both; }
+
+/* Floating score popups (shard pickups, near misses) */
+#floaters { position: absolute; inset: 0; overflow: hidden; }
+.floater {
+  position: absolute;
+  font: 800 clamp(13px, 1.9vw, 19px)/1 var(--mono);
+  letter-spacing: .04em;
+  color: var(--warn);
+  text-shadow: 0 0 14px currentColor;
+  animation: floatUp 1s ease-out 1 both;
+  white-space: nowrap;
+}
+@keyframes floatUp {
+  0%   { opacity: 0; transform: translate(-50%, 0) scale(.7); }
+  16%  { opacity: 1; transform: translate(-50%, -12px) scale(1.1); }
+  100% { opacity: 0; transform: translate(-50%, -68px) scale(.95); }
+}
+
+/* ─── game over stats ───────────────────────────────────────────────────── */
+.statgrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  width: 100%;
+  background: rgba(143, 168, 196, .12);
+  border: 1px solid rgba(143, 168, 196, .12);
+}
+.statgrid .cell { background: rgba(8, 12, 28, .9); padding: 13px 16px; }
+.statgrid .cell .k { font: 600 9px/1 var(--mono); letter-spacing: .3em; text-transform: uppercase; color: var(--ink-faint); }
+.statgrid .cell .v { font: 700 clamp(17px, 2.8vw, 25px)/1 var(--mono); color: #fff; margin-top: 7px; font-variant-numeric: tabular-nums; }
+.statgrid .cell.wide { grid-column: 1 / -1; }
+.statgrid .cell .v.acc { color: var(--acc); }
+
+.record {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font: 800 clamp(10px, 1.5vw, 12px)/1 var(--mono);
+  letter-spacing: .3em;
+  text-transform: uppercase;
+  color: #04030c;
+  background: var(--warn);
+  padding: 7px 13px;
+  box-shadow: 0 0 26px rgba(255, 204, 51, .6);
+  animation: pop .5s cubic-bezier(.2, 1.5, .4, 1) 1;
+}
+
+/* ─── loading ───────────────────────────────────────────────────────────── */
+#loadBar { width: min(320px, 70vw); height: 2px; background: rgba(143, 168, 196, .2); position: relative; overflow: hidden; }
+#loadFill { position: absolute; inset: 0 auto 0 0; width: 0%; background: var(--acc); box-shadow: 0 0 14px var(--acc); transition: width .2s; }
+
+/* ─── touch controls ────────────────────────────────────────────────────── */
+#touchHint { display: none; }
+@media (hover: none) and (pointer: coarse) {
+  #touchHint { display: flex; gap: 18px; align-items: center; justify-content: center; flex-wrap: wrap; }
+}
+.hintchip {
+  display: flex; align-items: center; gap: 7px;
+  font: 600 10px/1 var(--mono); letter-spacing: .18em; text-transform: uppercase;
+  color: var(--ink-dim);
+  border: 1px solid rgba(143, 168, 196, .2);
+  padding: 7px 11px;
+}
+.hintchip b { color: var(--acc); font-weight: 700; }
+
+/* ─── misc ──────────────────────────────────────────────────────────────── */
+#fps {
+  position: absolute;
+  bottom: calc(6px + var(--safe-b));
+  right: calc(10px + var(--safe-r));
+  font: 600 10px/1 var(--mono);
+  color: var(--ink-faint);
+  letter-spacing: .1em;
+  display: none;
+}
+#fps.on { display: block; }
+
+.iconbtn {
+  position: absolute;
+  top: calc(16px + var(--safe-t));
+  width: 34px; height: 34px;
+  display: grid; place-items: center;
+  background: rgba(8, 12, 28, .6);
+  border: 1px solid rgba(143, 168, 196, .22);
+  color: var(--ink-dim);
+  cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s;
+  pointer-events: auto;
+}
+.iconbtn:hover { color: var(--acc); border-color: var(--acc); background: rgba(22, 242, 255, .1); }
+.iconbtn svg { width: 17px; height: 17px; fill: currentColor; }
+
+.row-inline { display: flex; gap: 12px; align-items: center; justify-content: center; flex-wrap: wrap; }
+
+.hidden { display: none !important; }
+
+/* Respect a user's reduced-motion preference for the decorative animations. */
+@media (prefers-reduced-motion: reduce) {
+  .glitch.fire::before, .glitch.fire::after { animation: none; }
+  #banner.show { animation-duration: 1.2s; }
+  .floater { animation-duration: .6s; }
+}
+
+/* Portrait phones: tighten everything up. */
+@media (orientation: portrait) and (max-width: 560px) {
+  .menu { width: 92vw; }
+  .statgrid { grid-template-columns: 1fr 1fr; }
+  .hud-tl .stat-value { font-size: 30px; }
+  #combo { top: auto; bottom: calc(96px + var(--safe-b)); transform: none; }
+  #combo .mult { font-size: 30px; }
+  #comboBar { width: 64px; height: 5px; }
+  #comboFill { inset: 0 auto 0 0; height: 100% !important; width: var(--w, 0%); }
+}
